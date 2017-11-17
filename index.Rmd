@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Ann Crawford"
+date: "November 16, 2017"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("D:/Data/Coursera/DataScience/8-Machine-Learning")
+#setwd("C:/Data/Coursera/8-Machine-Learning")
+library(caret)
+```
+## Modeling Process
+Create a predictive model that classifies quality of a given weight lifting activity. 
+The process will use the caret package and the following steps:
+
+1. Read data, examine and apply minimal data clean up
+2. Split data into test and train 
+3. Pick features using cross validation
+4. Pick prediction features
+5. Apply prediction to test
+6. Estimate out of sample error rate
+
+The data set used to train and test the model is located at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv.
+
+The trained model will predict 20 test cases.
+The 20 experiments for the trained model is located at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv.
+
+```{r readData }
+quizds <-read.csv("pml-testing.csv",na.strings = c("NA","NaN","","#DIV/0!"))
+wtliftrawds <-read.csv("pml-training.csv",na.strings = c("NA","NaN","","#DIV/0!"))
+
+```
+```{r examinePreprocess, echo=FALSE}
+
+# check NA's
+NAcnt <-sapply(wtliftrawds, function(x) sum(is.na(x)))
+Missing <- table(NAcnt)
+
+# 2 groups of predictors
+# 67 variables with this count
+Nbr2 <- wtliftrawds[,which(NAcnt  == 19216)]
+# 60 varables that have no missing values 
+NoNA <- wtliftrawds[,which(NAcnt == 0)]
+# remove varables with No information i.e all NA's and mostly NA
+wtliftds <- wtliftrawds[,which(NAcnt < 19217) ]   ## != nrow(wtliftrawds))]
+#check for Class Imbalances 
+A <-table(wtliftrawds$classe)
+
+```
+## Modeling Details
+Prior to beginning the modeling process, perform basic examination on the raw data. There are `r nrow(wtliftrawds)` observations and `r ncol(wtliftrawds) ` variables with `r sum(is.na(wtliftrawds)) ` missing values. `r ncol(wtliftrawds[,which(NAcnt == nrow(wtliftrawds))]) ` columns contain all empty values and will be removed.   The observations will be used to predict classe.  The observations are slightly imbalanced to the A classe result. The percentage of observations are `r sapply(A, function(x,d = sum(A)) round(x/d,2)*100) ` for classe A, B, C, D, E respectvely. Correlation and Near Zero Variance analysis further reduced the number of variables.
+
+### K Fold Cross Validation
+10 fold cross validation was coded into the traincontrol to with repeated samplings for model training and feature selection using built in Recursive Feature Elimination (RFE) of caret.
+
+### Model Selection
+This is a classification prediction problem. Two popular classification models ,gbm and rpart were trained and compared.  These are caret classification models with built-in feature selection.  Gradient boosting was chosen because of the higher accuracy. 
+
+## Begin R Code
+The remainder of this document shows the specific code used in the modeling process. 
+
+#### Split Data
+Split the data using createDataPartion. 
+```{r splitdata}
+set.seed(3456)
+trainIndex <- createDataPartition(wtliftds$classe, p = .7, 
+                                  list = FALSE,   times = 1)
+trainds <- wtliftds[ trainIndex,]
+testds  <- wtliftds[-trainIndex,]
+```
+#### Basic Analysis
+The `r ncol(wtliftrawds) ` variables  were reduced using correlation and zero variance analysis.  This first pass on variable reduction helps model performance. x vector is created to hold observations and y to hold the dependent variable, classe. 
+
+```{r basicAnalysis}
+# remove meta data used for data collection and the independent variable classe 
+x <- subset(trainds, select=-c(X,user_name, new_window,cvtd_timestamp,classe ) )
+# remove near zero variance preditors
+x <- x[-nearZeroVar(x, saveMetrics= FALSE)]
+
+## remove highly correlated predictors
+CMx <- cor(x, use="complete.obs")
+highlyCorDescr <- findCorrelation(CMx, cutoff = 0.75)
+x <- x[,-highlyCorDescr]
+y<-trainds$classe
+
+```
+#### K Fold cross validation and Model Selection
+Train two models with the same train control was used on both the rpart and gbm using  10 k fold cross validation.  
+```{r trainmodel}
+starttime <- date()
+# 10 fold cross validation with 3 repeats
+fitControl <- trainControl(
+                           method = "repeatedcv",
+                           number = 10,
+                           repeats = 3
+                           )
+
+# use models with built in feature seleciton,Stochastic Gradient Boosting
+set.seed(825)
+fitgbm <- train(x,y,
+                 method = "gbm", 
+                 trControl = fitControl,
+                 verbose = FALSE)
+#CART or Ordinal Responses
+set.seed(825)
+fitrpart <- train(x,y,
+                 method = "rpart", 
+                 trControl = fitControl
+                 )
+
+# collect resamples
+results <- resamples(list( GBM=fitgbm, RPART=fitrpart))
+endtime <- date()
+
+```
+#### Apply model to test for out of sample error rate.
+The test data is used to calulate the out of sample error rate. For a classifacation model this is the accuracy.
+The conufsion matix shows the overall out of sample errors, the sensitivity per class and the specific counts per class. 
+```{r predcitonTest}
+predgbm        <- predict(fitgbm,newdata=testds)
+CM <- confusionMatrix(testds$classe, predgbm)
+# Out of error rate
+CM
+```
+#### Plots 
+Plots show the effects of boosting increases accuracy and how variable reduction over K Fold cross validation.
+```{r fig1, fig.height = 5, fig.width = 6, fig.align = "center", echo=FALSE}
+#densityplot(fitgbm)
+plot(fitgbm)
+```
+```{r fig2, fig.height = 5, fig.width = 6, fig.align = "center", echo=FALSE} 
+varImpOut <- varImp(fitgbm)
+plot(varImpOut, main = "Variable Importance of Top 25", top = 25)
+```
+```{r perdictquiz}
+ q1 <- predict(fitgbm,newdata = quizds)
+
+```
+
+#### Quiz
+Quiz Answers are : `r q1 ` for problems 1 to 20 respectively.
+
+### Refrences
+https://stackoverflow.com/questions/26558631/predict-lm-in-a-loop-warning-prediction-from-a-rank-deficient-fit-may-be-mis
+https://www.rdocumentation.org/packages/caret/versions/6.0-77/topics/trainControl
+http://topepo.github.io/caret/model-training-and-tuning.html
+https://www.packtpub.com/mapt/book/big_data_and_business_intelligence/9781783984527/5/ch05lvl1sec38/feature-selection-for-svms
+http://www.edii.uclm.es/~useR-2013/Tutorials/kuhn/user_caret_2up.pdf
+https://en.wikipedia.org/wiki/Receiver_operating_characteristic
+precision on multi classifier http://text-analytics101.rxnlp.com/2014/10/computing-precision-and-recall-for.html
+multi classifer acc http://notesbyanerd.com/2014/12/17/multi-class-performance-measures/
+ROC   http://www.dataschool.io/roc-curves-and-auc-explained/
+https://www.r-bloggers.com/illustrated-guide-to-roc-and-auc/
+http://blog.revolutionanalytics.com/2016/03/com_class_eval_metrics_r.html
+https://cran.r-project.org/web/packages/caret/caret.pdf
+compare models https://machinelearningmastery.com/compare-models-and-select-the-best-using-the-caret-r-package/
+model list for caret http://topepo.github.io/caret/available-models.html
+gbm explained https://www.analyticsvidhya.com/blog/2015/09/complete-guide-boosting-methods/
+rpart explained https://www.statmethods.net/advstats/cart.html
+pricipal comp anal https://www.analyticsvidhya.com/blog/2016/03/practical-guide-principal-component-analysis-python/
+https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/
+tutorial site http://www.edii.uclm.es/~useR-2013/Tutorials/kuhn/user_caret_2up.pdf
+
